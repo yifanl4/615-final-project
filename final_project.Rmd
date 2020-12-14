@@ -1,0 +1,182 @@
+---
+title: "League of Legends Data Analysis"
+author: "Yifan Liu"
+date: "12/11/2020"
+output: pdf_document
+urlcolor: Blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(knitr)
+library(caret)
+library(kableExtra)
+library(cvms)
+library(broom)
+library(citation)
+opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+```
+
+***
+
+# Abstract
+
+>Statistical learning methods were applied to the League of Legends dataset on the web. Riot provides every player with free API keys so they can use the API to explore the data behind each games. The analysis of high ranking players' data have enormous potential to drive players to success. A variety of learning techniques were explored and validated.
+
+***
+
+# Introduction
+
+League of Legends is a multi-player online battle arena (MOBA) video game often cited as the world’s largest esport. The players form a team of five and play as the role of a champion, characters with unique abilities and varying around a type of class, to battle against another team of players. The general objective to win is to destroy enemy Nexus in the other side. Blue side is the term for the team who starts on the left side of the map, while red side is the term for the team who starts of the right side of the map. This data collection focuses on the Draft Pick mode in League of legends. The Draft Pick mode is a PvP game mode which players can ban and pick champions from the selection pool. It provides a competitive interaction to champion selection that can influence the game's setting. In total, there are 151 champions in League of Legends and are divided into several different classes. 
+
+The ranking system of the League of Legends places the millions of LOL players around the globe into a tier and division based on their ability and performance. It includes nine tiers, each split into four divisions, with four being the lowest in that tier and one being the highest. The progress of each player through each division and tier by earning League Points (LP) for games that their team win. The exact amount of points is determined by players' Matchmaking Rating (MMR) which are based on the statistics of players in each game. The dataset this analysis is using focuses on the Challenger tier which contains only about 0.011% players among the total population. 
+
+***
+
+# Method
+
+## Data
+
+The dataset I am using for this project has a total of 26904 observations and 50 variables. The data contains key information that can affect the win or loss in the game. LOL includes objects, champions, and minions. The objects here represent dragons, barons, towers, suppressors, and more. Therefore, the factor analysis that affects the win or loss of the game and the methodology to predict the win or loss of the game will be important. The binary variables in the dataset indicates whether each team has captured the object. 1 represents object captured while 0 represents the object has been captured by the opponent team. Here are some additional data description:
+
+*
+`ward`: Map lighting tools
+*
+`gold`: Money to buy items
+*
+`tower`: Attack turrets protecting our camp or enemy camp
+*
+`inhibitors`: One team can summon their superminions (very powerful minions) by breaking the suppressor
+*
+`dragon & baron`: Objects that can receive buffs when destroyed
+*
+`minion`: Units that comprise the main force sent by the Nexus which can be killed by summoners to earn gold and experience
+*
+`level`: Champion level with min: LV 1 and max: LV 18
+
+```{r load data, message = FALSE}
+data = read.csv("Challenger_Ranked_Games.csv")
+```
+
+Because the dataset contains the data of both blue team and red team, this report will focus on blue team and filter the dataset first. LOL has the option of "surrender" in the first 15 minutes after the beginning of the game. Thus, games ended within 15 minutes are filtered. 
+
+```{r clean data, tidy.opts=list(width.cutoff=80)}
+#remove all nas
+d1 = na.omit(data)
+
+#factor data
+col = c("blueWins", "blueFirstBlood", 
+        "blueFirstTower", "blueFirstBaron", 
+        "blueFirstDragon", "blueFirstInhibitor")
+d1[col] = lapply(d1[col], factor)
+
+#filter data
+d2 = d1 %>% select(-gameId, -starts_with("red"))
+d3 = d2 %>% filter(gameDuraton > 900, 
+                   blueAvgLevel >= 3 & blueAvgLevel <= 18, 
+                   blueJungleMinionKills != 0, 
+                   blueKillingSpree != 0, 
+                   blueObjectDamageDealt != 0)
+
+#select variable for modeling
+d4 = d3 %>% select(-gameDuraton, -blueTotalLevel, -blueKillingSpree)
+
+#scale data size
+col2 = c("blueWardPlaced", "blueChampionDamageDealt", 
+         "blueTotalGold", "blueTotalMinionKills", 
+         "blueJungleMinionKills", "blueTotalHeal", "blueObjectDamageDealt")
+d4[col2] = lapply(d4[col2], log)
+d4[col2] = lapply(d4[col2], round, 4)
+```
+
+```{r split - data}
+set.seed(42)
+# test-train split
+trn_idx = sample(nrow(d4), size = 0.8 * nrow(d4))
+d4_trn = d4[trn_idx,]
+d4_tst = d4[-trn_idx,]
+```
+
+## Model
+
+In order to predict the winning conditions of each game, logistic regression is explored. 
+
+```{r}
+set.seed(42)
+
+cv = trainControl(method = "repeatedcv", number = 5, savePredictions = TRUE)
+```
+
+```{r}
+mod = train(blueWins ~ .,
+            data = d4_trn,
+            method = "glm",
+            family = "binomial",
+            trControl = cv,
+            tuneLength = 5)
+```
+
+```{r}
+kable(mod$results)
+```
+
+Below are the coefficients of the final model. 
+
+```{r}
+mod$finalModel$coefficients
+```
+
+## Evaluation
+
+Model is ultimately evaluated based on its ability to accurately predicted winning condition for the blue team.
+
+```{r}
+pred = predict(mod, newdata = d4_tst)
+cfm = confusionMatrix(data = pred, d4_tst$blueWins)
+cfm
+```
+
+***
+
+# Result
+
+From the result above we can tell that the model has an accuracy of 97.23% which means over the total 4628 observations in the testing dataset, there are 97.23% which are 4500 observations are predicted correctly. To be more specific, according to the confusion matrix below, when the blue team wins the game, 51.3% observations are correctly predicted; when the blue team loses the game, 46% observations are correctly predicted. 
+
+```{r, warning=FALSE, fig.width=3.5, fig.height=3.5}
+plot_confusion_matrix(tidy(cfm$table), 
+                      target_col = "Reference", 
+                      prediction_col = "Prediction", 
+                      counts_col = "n", 
+                      add_counts = FALSE)
+```
+
+## Discussion
+
+To sum up, according the analysis results, the logistic regression model has a generally good performance in predicting the winning conditions in League of Legends. The accuracy of the model is 97.23% which is very high when applying the model to the testing dataset. According to the coefficients of the model, the variable `blueTotalGold` which represents the total gold of blue team has earned plays the most important role in deciding the winning conditions of each game. This totally makes sense because the gold in the game can be used to buy items which can improve champions' abilities and damages. In reality, it is very common that the team with higher gold will win the game with little exceptions. What's more, the greater the difference between the gold earned by two teams, the more difficult for the team fall behind to achieve a comeback. The variable `blueWardPlaced` plays the second important role besides `blueTotalGold`. This is interesting because `blueWardPlaced` represents the number of warding items which are deployable units that can be used to remove the fog of war in a certain area of the map. In other words, warding items can provide information about the enemy team such as champions' positions. The more warding items one team has used in a game, the more clearly they will know about their opponents' movements and strategies. However, in most cases, many players will forget to buy and put warding items. According to the analysis, the significance of warding has been justified. 
+
+However, there are still some limitations of this analysis. One concern of this analysis is the data. As mentioned above, the dataset is only about the Challenger tier players in the North America region. Due to the enormous difference among the skills of players, whether the performance of there players can represent players from other tiers or regions is still questionable. Also due to the difference among the skills of players, factors such as playing strategies or styles might vary dramatically and causing the results of applying the same model to different dataset to vary. So applying this modeling technique to different dataset and comparing the results will provide better insights. Also, this analysis focuses on the logistic regression model which performs well but not might be the best model to predict. Further analysis including model selection might be recommended to solve this problem. 
+
+\newpage
+
+# Appendix
+
+## EDA
+
+Please see the [shiny application](https://bu-rstudio-connect.bu.edu/content/24).
+
+## Reference
+*
+League of Legends WIKI Fandom. Available at: https://leagueoflegends.fandom.com/wiki/League_of_Legends_Wiki (Accessed: 11 Dec 2020).
+
+```{r}
+package2zenodo("knitr")
+package2zenodo("tidyverse")
+package2zenodo("kableExtra")
+package2zenodo("citation")
+package2zenodo("caret")
+package2zenodo("cvms")
+package2zenodo("broom")
+```
+
+
